@@ -26,6 +26,7 @@ create table if not exists leadgen.companies (
   profit_before_tax text null,
   turnover text null,
   clean_domain text null,
+  sector text null,
   constraint companies_pkey primary key (id),
   constraint companies_company_key_key unique (company_key)
 );

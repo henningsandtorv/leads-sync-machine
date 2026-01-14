@@ -10,6 +10,7 @@ export type CompanyRecord = {
   industry?: string | null;
   company_size?: string | null;
   location?: string | null;
+  sector?: string | null;
 };
 
 export type PersonRecord = {
@@ -19,6 +20,8 @@ export type PersonRecord = {
   email?: string | null;
   phone?: string | null;
   linkedin_url?: string | null;
+  normalized_company_name?: string | null;
+  normalized_company_domain?: string | null;
 };
 
 export type JobPostRecord = {
@@ -153,6 +156,21 @@ export async function getJobPostIdByFinnId(
   return data.id as string;
 }
 
+/**
+ * Get all decision makers for a company
+ */
+export async function getDecisionMakersByCompanyId(
+  companyId: string
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("company_people")
+    .select("person_id")
+    .eq("company_id", companyId)
+    .eq("role", "decision_maker");
+  if (error || !data) return [];
+  return data.map((row) => row.person_id as string);
+}
+
 async function upsertLinkTable<T extends LinkRecord>(params: {
   table: string;
   records: T[];
@@ -161,15 +179,31 @@ async function upsertLinkTable<T extends LinkRecord>(params: {
 }) {
   const { table, records, keyBuilder, filters } = params;
   if (!records.length) return { inserted: 0, existing: 0 };
+
+  // Deduplicate records within the batch to avoid "cannot affect row a second time" errors
+  const seenKeys = new Set<string>();
+  const deduplicatedRecords: T[] = [];
+  for (const record of records) {
+    const key = keyBuilder(record);
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      deduplicatedRecords.push(record);
+    }
+  }
+
   const { data, error } = await Object.entries(filters).reduce(
     (query, [column, values]) => query.in(column, values),
     supabase.from(table).select("*")
   );
   if (error) throw error;
   const existingKeys = new Set((data ?? []).map(keyBuilder));
-  const incomingKeys = new Set(records.map(keyBuilder));
-  const newRecords = records.filter((r) => !existingKeys.has(keyBuilder(r)));
-  const { error: upsertError } = await supabase.from(table).upsert(records);
+  const incomingKeys = new Set(deduplicatedRecords.map(keyBuilder));
+  const newRecords = deduplicatedRecords.filter(
+    (r) => !existingKeys.has(keyBuilder(r))
+  );
+  const { error: upsertError } = await supabase
+    .from(table)
+    .upsert(deduplicatedRecords);
   if (upsertError) throw upsertError;
   return {
     inserted: newRecords.length,

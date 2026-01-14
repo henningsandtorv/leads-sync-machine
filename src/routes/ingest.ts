@@ -6,6 +6,8 @@ import {
   normalizePhone,
   normalizeEmail,
   normalizeDate,
+  classifyPersonRole,
+  normalizeNameForComparison,
 } from "../lib/normalize";
 import { buildCompanyKey, buildPersonKey } from "../lib/keys";
 import {
@@ -17,6 +19,7 @@ import {
   getCompanyIdByKey,
   getPersonIdByKey,
   getJobPostIdByFinnId,
+  getDecisionMakersByCompanyId,
   CompanyRecord,
   PersonRecord,
   JobPostRecord,
@@ -84,10 +87,17 @@ async function handleApifyJob(request: any, reply: any, source: string | null) {
     name: payload.company,
   });
 
+  // Build company record with all available data from scraper
+  // Only include fields that have values to preserve existing data on updates
   const company: CompanyRecord = {
     company_key: companyKey,
     name: payload.company,
-    domain: companyDomain,
+    ...(companyDomain && { domain: companyDomain }),
+    ...(companyDomain && { clean_domain: companyDomain }), // clean_domain is same as normalized domain
+    ...(payload.sector && { sector: payload.sector }),
+    ...(payload.industries &&
+      payload.industries.length > 0 && { industry: payload.industries[0] }), // Use first industry if available
+    ...(payload.location && { location: payload.location }),
   };
 
   // Upsert company and get its ID
@@ -145,6 +155,10 @@ async function handleApifyJob(request: any, reply: any, source: string | null) {
       company_name: payload.company, // Pass company name for name-based keys
       full_name: p.name,
     });
+
+    // Normalize company name for people record
+    const normalizedCompanyName = normalizeNameForComparison(payload.company);
+
     return {
       person_key: personKey,
       full_name: p.name,
@@ -152,6 +166,10 @@ async function handleApifyJob(request: any, reply: any, source: string | null) {
       phone: normalizePhone(p.phoneNumber),
       email: normalizeEmail(p.email),
       linkedin_url: p.linkedin ?? null,
+      ...(normalizedCompanyName && {
+        normalized_company_name: normalizedCompanyName,
+      }),
+      ...(companyDomain && { normalized_company_domain: companyDomain }),
     };
   });
 
@@ -164,37 +182,67 @@ async function handleApifyJob(request: any, reply: any, source: string | null) {
     }
   }
 
-  // Build link records with UUIDs
+  // Build link records with UUIDs, using role classification based on title
   const jobPersonLinks = people
-    .map((p) => {
+    .map((p, index) => {
       const personId = personIdMap.get(p.person_key);
       if (!personId) return null;
+
+      // Get the original person data to access their role/title
+      const originalPerson = payload.contactPersons[index];
+      const classifiedRole = classifyPersonRole(originalPerson?.role);
+
       return {
         job_post_id: jobPostId,
         person_id: personId,
-        role: "contact_person" as const,
+        role: classifiedRole,
       };
     })
     .filter((link): link is NonNullable<typeof link> => link !== null);
 
   const companyPersonLinks = people
-    .map((p) => {
+    .map((p, index) => {
       const personId = personIdMap.get(p.person_key);
       if (!personId) return null;
+
+      // Get the original person data to access their role/title
+      const originalPerson = payload.contactPersons[index];
+      const classifiedRole = classifyPersonRole(originalPerson?.role);
+
       return {
         company_id: companyId,
         person_id: personId,
-        role: "contact_person" as const,
+        role: classifiedRole,
       };
     })
     .filter((link): link is NonNullable<typeof link> => link !== null);
+
+  // Enrich job post with decision makers from the company
+  // But exclude decision makers who are already linked as decision_maker to avoid duplicates
+  const decisionMakerIds = await getDecisionMakersByCompanyId(companyId);
+  const existingDecisionMakerPersonIds = new Set(
+    jobPersonLinks
+      .filter((link) => link.role === "decision_maker")
+      .map((link) => link.person_id)
+  );
+  const decisionMakerLinks = decisionMakerIds
+    .filter((personId) => !existingDecisionMakerPersonIds.has(personId))
+    .map((personId) => ({
+      job_post_id: jobPostId,
+      person_id: personId,
+      role: "decision_maker" as const,
+    }));
+
+  // Combine contact persons and decision makers for job_post_people
+  const allJobPersonLinks = [...jobPersonLinks, ...decisionMakerLinks];
 
   const results = {
     companies: companyResult,
     job_posts: jobResult,
     people: peopleResult,
-    job_post_people: await upsertJobPostPeople(jobPersonLinks),
+    job_post_people: await upsertJobPostPeople(allJobPersonLinks),
     company_people: await upsertCompanyPeople(companyPersonLinks),
+    decision_makers_linked: decisionMakerLinks.length,
   };
 
   reply.send(results);

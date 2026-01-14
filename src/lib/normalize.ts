@@ -181,3 +181,127 @@ export function normalizeDate(dateStr?: string | null): string | null {
 
   return null;
 }
+
+/**
+ * Classifies a person's role based on their title
+ * Returns one of: 'decision_maker', 'recruiter', 'contact_person', 'other'
+ */
+export function classifyPersonRole(
+  title: string | null | undefined
+): "decision_maker" | "recruiter" | "contact_person" | "other" {
+  if (!title) {
+    return "contact_person"; // Default if no title
+  }
+
+  const normalizedTitle = title.toLowerCase().trim();
+
+  // Decision maker keywords (executives, managers, directors, owners)
+  const decisionMakerKeywords = [
+    "ceo",
+    "chief executive",
+    "chief executive officer",
+    "cto",
+    "chief technology",
+    "chief technical",
+    "cfo",
+    "chief financial",
+    "coo",
+    "chief operating",
+    "president",
+    "founder",
+    "owner",
+    "proprietor",
+    "director",
+    "managing director",
+    "general manager",
+    "vp",
+    "vice president",
+    "vice-president",
+    "head of",
+    "head",
+    "lead",
+    "manager",
+    "senior manager",
+    "general manager",
+    "partner",
+    "principal",
+    "executive",
+    "it",
+    // Norwegian decision maker titles
+    "daglig leder",
+    "sjef",
+    "direktør",
+    "administrerende direktør",
+    "adm. direktør",
+    "styreleder",
+    "eier",
+    "gründer",
+    "leder",
+    "avdelingsleder",
+    "prosjektleder",
+    "teamleder",
+    "områdeleder",
+    "regionleder",
+    "salgsdirektør",
+    "markedsdirektør",
+    "teknisk direktør",
+    "finansdirektør",
+    "operasjonsdirektør",
+    "produksjonsleder",
+    "butikksjef",
+    "kontorsjef",
+    "avdelingssjef",
+  ];
+
+  // Recruiter keywords
+  const recruiterKeywords = [
+    "recruiter",
+    "recruitment",
+    "talent acquisition",
+    "talent",
+    "hiring",
+    "hr",
+    "human resources",
+    "people",
+    "people operations",
+    "people ops",
+    "staffing",
+    "sourcing",
+    "recruiting",
+    "talent manager",
+    "talent partner",
+    // Norwegian recruiter titles
+    "rekrutteringsansvarlig",
+    "rekrutteringskonsulent",
+    "rekrutterer",
+    "rekruttering",
+    "talentansvarlig",
+    "talentkonsulent",
+    "ansettelsesansvarlig",
+    "ansettelsesleder",
+    "personalsjef",
+    "personalspesialist",
+    "hr-sjef",
+    "hr-konsulent",
+    "hr-spesialist",
+    "personalkonsulent",
+    "ansettelseskonsulent",
+  ];
+
+  // Check for decision maker first (higher priority)
+  for (const keyword of decisionMakerKeywords) {
+    if (normalizedTitle.includes(keyword)) {
+      return "decision_maker";
+    }
+  }
+
+  // Check for recruiter
+  for (const keyword of recruiterKeywords) {
+    if (normalizedTitle.includes(keyword)) {
+      return "recruiter";
+    }
+  }
+
+  // Default to contact_person if no match
+  return "contact_person";
+}

@@ -4,7 +4,7 @@ import "dotenv/config";
 const APIFY_DATASET_URL_SYSTEK = process.env.APIFY_DATASET_URL_SYSTEK ?? "";
 const APIFY_DATASET_URL_ILDER = process.env.APIFY_DATASET_URL_ILDER ?? "";
 const INGEST_BASE_URL =
-  process.env.INGEST_URL ?? "http://localhost:3000/ingest";
+  process.env.INGEST_URL ?? "http://localhost:5432/ingest";
 
 // Simple helper
 async function postJob(job: any, source: "systek" | "ilder") {
@@ -31,17 +31,30 @@ async function postJob(job: any, source: "systek" | "ilder") {
   };
 
   const endpoint = `${INGEST_BASE_URL}/apify-job-${source}`;
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Ingest failed (${res.status}): ${text}`);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Ingest failed (${res.status}): ${text}`);
+    }
+    return res.json();
+  } catch (err: any) {
+    // Provide more detailed error information
+    if (err.code === "ECONNREFUSED" || err.message?.includes("ECONNREFUSED")) {
+      throw new Error(
+        `Connection refused - is the server running at ${endpoint}? Start it with: npm run dev`
+      );
+    }
+    if (err.cause) {
+      throw new Error(`Fetch failed: ${err.message} (${err.cause.message})`);
+    }
+    throw err;
   }
-  return res.json();
 }
 
 async function processDataset(datasetUrl: string, source: "systek" | "ilder") {
