@@ -1,0 +1,221 @@
+import { FastifyInstance, FastifyPluginOptions } from "fastify";
+import { z } from "zod";
+import {
+  extractFinnIdFromUrl,
+  normalizeDomainHost,
+  normalizePhone,
+  normalizeEmail,
+  normalizeDate,
+} from "../lib/normalize";
+import { buildCompanyKey, buildPersonKey } from "../lib/keys";
+import {
+  upsertCompanies,
+  upsertJobPosts,
+  upsertPeople,
+  upsertJobPostPeople,
+  upsertCompanyPeople,
+  getCompanyIdByKey,
+  getPersonIdByKey,
+  getJobPostIdByFinnId,
+  CompanyRecord,
+  PersonRecord,
+  JobPostRecord,
+} from "../lib/db";
+
+const apifySchema = z.object({
+  url: z.string().url(),
+  title: z.string(),
+  description: z.string(),
+  company: z.string(),
+  contactPersons: z
+    .array(
+      z.object({
+        name: z.string(),
+        role: z.string().optional(),
+        phoneNumber: z.string().optional(),
+        email: z.string().optional(),
+        linkedin: z.string().optional(),
+      })
+    )
+    .default([]),
+  applicationUrl: z.string().url().optional(),
+  location: z.string().optional(),
+  employmentType: z.string().optional(),
+  email: z.string().optional(),
+  salary: z.string().optional(),
+  publicationDate: z.string().optional(),
+  expirationDate: z.string().optional(),
+  companyLogoUrl: z.string().url().optional(),
+  domain: z.string().optional(),
+  sector: z.string().optional(),
+  industries: z.array(z.string()).optional(),
+  positionFunctions: z.array(z.string()).optional(),
+  language: z.string().optional(),
+  finnkode: z.string().optional(),
+});
+
+async function handleApifyJob(request: any, reply: any, source: string | null) {
+  const parsed = apifySchema.safeParse(request.body);
+  if (!parsed.success) {
+    reply
+      .status(400)
+      .send({ error: "Bad Request", message: parsed.error.message });
+    return;
+  }
+
+  const payload = parsed.data;
+  const finnId = extractFinnIdFromUrl(payload.url) || payload.finnkode || null;
+  if (!finnId) {
+    reply.status(400).send({
+      error: "Bad Request",
+      message: "Unable to extract finn_id from url",
+    });
+    return;
+  }
+
+  // Extract domain, but prefer payload.domain over extracting from URL
+  // If domain is missing or invalid, buildCompanyKey will fall back to company name
+  const companyDomain = payload.domain
+    ? normalizeDomainHost(payload.domain)
+    : null;
+
+  const companyKey = buildCompanyKey({
+    domain_host: companyDomain,
+    name: payload.company,
+  });
+
+  const company: CompanyRecord = {
+    company_key: companyKey,
+    name: payload.company,
+    domain: companyDomain,
+  };
+
+  // Upsert company and get its ID
+  const companyResult = await upsertCompanies([company]);
+  const companyId = companyResult.records[0]?.id;
+  if (!companyId) {
+    reply.status(500).send({
+      error: "Internal Server Error",
+      message: "Failed to get company ID after upsert",
+    });
+    return;
+  }
+
+  const job: JobPostRecord = {
+    finn_id: finnId,
+    company_id: companyId,
+    finn_url: payload.url,
+    title: payload.title,
+    description: payload.description,
+    application_url: payload.applicationUrl ?? null,
+    contact_email: payload.email ?? null,
+    location: payload.location ?? null,
+    employment_type: payload.employmentType ?? null,
+    salary: payload.salary ?? null,
+    publication_date: normalizeDate(payload.publicationDate),
+    expiration_date: normalizeDate(payload.expirationDate),
+    sector: payload.sector ?? null,
+    industries: payload.industries ?? null,
+    position_functions: payload.positionFunctions ?? null,
+    language: payload.language ?? null,
+    company_logo_url: payload.companyLogoUrl ?? null,
+    company_name: payload.company,
+    company_domain_host: companyDomain,
+    source: source,
+    raw_payload: payload,
+  };
+
+  // Upsert job post and get its ID
+  const jobResult = await upsertJobPosts([job]);
+  const jobPostId = jobResult.records[0]?.id;
+  if (!jobPostId) {
+    reply.status(500).send({
+      error: "Internal Server Error",
+      message: "Failed to get job post ID after upsert",
+    });
+    return;
+  }
+
+  const people: PersonRecord[] = payload.contactPersons.map((p) => {
+    const personKey = buildPersonKey({
+      linkedin_url: p.linkedin,
+      email: p.email,
+      phone: p.phoneNumber,
+      company_key: companyKey,
+      company_name: payload.company, // Pass company name for name-based keys
+      full_name: p.name,
+    });
+    return {
+      person_key: personKey,
+      full_name: p.name,
+      title: p.role ?? null,
+      phone: normalizePhone(p.phoneNumber),
+      email: normalizeEmail(p.email),
+      linkedin_url: p.linkedin ?? null,
+    };
+  });
+
+  // Upsert people and get their IDs
+  const peopleResult = await upsertPeople(people);
+  const personIdMap = new Map<string, string>();
+  for (const person of peopleResult.records) {
+    if (person.person_key && person.id) {
+      personIdMap.set(person.person_key, person.id);
+    }
+  }
+
+  // Build link records with UUIDs
+  const jobPersonLinks = people
+    .map((p) => {
+      const personId = personIdMap.get(p.person_key);
+      if (!personId) return null;
+      return {
+        job_post_id: jobPostId,
+        person_id: personId,
+        role: "contact_person" as const,
+      };
+    })
+    .filter((link): link is NonNullable<typeof link> => link !== null);
+
+  const companyPersonLinks = people
+    .map((p) => {
+      const personId = personIdMap.get(p.person_key);
+      if (!personId) return null;
+      return {
+        company_id: companyId,
+        person_id: personId,
+        role: "contact_person" as const,
+      };
+    })
+    .filter((link): link is NonNullable<typeof link> => link !== null);
+
+  const results = {
+    companies: companyResult,
+    job_posts: jobResult,
+    people: peopleResult,
+    job_post_people: await upsertJobPostPeople(jobPersonLinks),
+    company_people: await upsertCompanyPeople(companyPersonLinks),
+  };
+
+  reply.send(results);
+}
+
+export default async function ingestRoutes(
+  app: FastifyInstance,
+  _opts: FastifyPluginOptions
+) {
+  // Original endpoint for backward compatibility (source defaults to null)
+  app.post("/apify-job", async (request, reply) => {
+    await handleApifyJob(request, reply, null);
+  });
+
+  // SYSTEK endpoint
+  app.post("/apify-job-systek", async (request, reply) => {
+    await handleApifyJob(request, reply, "systek");
+  });
+
+  // ILDER endpoint
+  app.post("/apify-job-ilder", async (request, reply) => {
+    await handleApifyJob(request, reply, "ilder");
+  });
+}
