@@ -15,11 +15,12 @@
   "dependencies": {
     "@fastify/rate-limit": "^9.1.0",
     "@supabase/supabase-js": "^2.43.4",
+    "@vercel/node": "^4.0.0",
     "csv-parse": "^6.1.0",
+    "dotenv": "^17.2.3",
     "fastify": "^4.26.2",
     "pino": "^9.3.1",
-    "zod": "^4.3.5",
-    "dotenv": "^17.2.3"
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
