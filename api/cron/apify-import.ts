@@ -1,47 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import "dotenv/config";
+import { handleApifyJob } from "../../src/routes/ingest";
 
 const APIFY_DATASET_URL_SYSTEK = process.env.APIFY_DATASET_URL_SYSTEK ?? "";
 const APIFY_DATASET_URL_ILDER = process.env.APIFY_DATASET_URL_ILDER ?? "";
-const INGEST_BASE_URL =
-  process.env.INGEST_URL ?? process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}/ingest`
-    : "http://localhost:3000/ingest";
-
-async function postJob(job: any, source: "systek" | "ilder") {
-  const endpoint = `${INGEST_BASE_URL}/apify-job-${source}`;
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      url: job.url,
-      title: job.title,
-      description: job.description,
-      company: job.company,
-      contactPersons: job.contactPersons ?? [],
-      email: job.email,
-      applicationUrl: job.applicationUrl,
-      location: job.location,
-      employmentType: job.employmentType,
-      salary: job.salary,
-      publicationDate: job.publicationDate,
-      expirationDate: job.expirationDate,
-      finnkode: job.finnkode,
-      companyLogoUrl: job.companyLogoUrl,
-      domain: job.domain,
-      sector: job.sector,
-      industries: job.industries,
-      positionFunctions: job.positionFunctions,
-      language: job.language,
-    }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Ingest failed (${res.status}): ${text}`);
-  }
-  return res.json();
-}
 
 async function processDataset(datasetUrl: string, source: "systek" | "ilder") {
   const dataRes = await fetch(datasetUrl);
@@ -53,9 +15,69 @@ async function processDataset(datasetUrl: string, source: "systek" | "ilder") {
 
   let ok = 0;
   let failed = 0;
+
   for (const [i, item] of items.entries()) {
     try {
-      await postJob(item, source);
+      // Create mock request/reply objects for the handler
+      const mockRequest = {
+        body: {
+          url: item.url,
+          title: item.title,
+          description: item.description,
+          company: item.company,
+          contactPersons: item.contactPersons ?? [],
+          email: item.email,
+          applicationUrl: item.applicationUrl,
+          location: item.location,
+          employmentType: item.employmentType,
+          salary: item.salary,
+          publicationDate: item.publicationDate,
+          expirationDate: item.expirationDate,
+          finnkode: item.finnkode,
+          companyLogoUrl: item.companyLogoUrl,
+          domain: item.domain,
+          sector: item.sector,
+          industries: item.industries,
+          positionFunctions: item.positionFunctions,
+          language: item.language,
+        },
+      };
+
+      let handlerError: Error | null = null;
+      let handlerResponse: any = null;
+      let statusCode = 200;
+
+      const mockReply = {
+        status: (code: number) => {
+          statusCode = code;
+          return {
+            send: (data: any) => {
+              if (code >= 400) {
+                handlerError = new Error(
+                  `Handler returned ${code}: ${JSON.stringify(data)}`
+                );
+              } else {
+                handlerResponse = data;
+              }
+              return mockReply;
+            },
+          };
+        },
+        send: (data: any) => {
+          handlerResponse = data;
+          return mockReply;
+        },
+      };
+
+      await handleApifyJob(mockRequest as any, mockReply as any, source);
+
+      // Check if handler returned an error status
+      if (statusCode >= 400 || handlerError) {
+        throw (
+          handlerError || new Error(`Handler returned status ${statusCode}`)
+        );
+      }
+
       ok++;
     } catch (err: any) {
       failed++;
@@ -69,13 +91,56 @@ async function processDataset(datasetUrl: string, source: "systek" | "ilder") {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Optional: Add authentication to prevent unauthorized access
+  // Require API secret authentication
+  const CRON_SECRET = process.env.CRON_SECRET;
+
+  if (!CRON_SECRET) {
+    console.error("CRON_SECRET environment variable is not set");
+    return res.status(500).json({
+      error: "Server configuration error: CRON_SECRET not configured",
+    });
+  }
+
+  // Check if this is a Vercel cron job (internal request)
+  // Vercel cron jobs may include x-vercel-cron header or come from internal network
+  const isVercelCron =
+    !!req.headers["x-vercel-cron"] ||
+    !!req.headers["x-vercel-signature"] ||
+    req.url?.includes("?secret="); // If secret is in query, it's likely from cron config
+
+  // Check Authorization header (Bearer token) - primary method for external calls
   const authHeader = req.headers.authorization;
-  if (
-    process.env.CRON_SECRET &&
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
-    return res.status(401).json({ error: "Unauthorized" });
+  const providedSecret = authHeader?.replace(/^Bearer\s+/i, "");
+
+  // Also check for x-api-secret header (alternative method)
+  const apiSecretHeader = req.headers["x-api-secret"] as string | undefined;
+
+  // Check query parameter secret (for Vercel cron jobs - add ?secret=<CRON_SECRET> to cron path in vercel.json)
+  const querySecret = req.query.secret as string | undefined;
+
+  // Verify authentication:
+  // 1. Valid secret provided via any method (header or query)
+  // 2. For Vercel cron, query parameter is acceptable; for external, prefer headers
+  const isValidSecret =
+    providedSecret === CRON_SECRET ||
+    apiSecretHeader === CRON_SECRET ||
+    querySecret === CRON_SECRET;
+
+  if (!isValidSecret) {
+    console.warn("Unauthorized cron job attempt", {
+      isVercelCron,
+      hasAuthHeader: !!authHeader,
+      hasApiSecretHeader: !!apiSecretHeader,
+      hasQuerySecret: !!querySecret,
+      url: req.url,
+      ip: req.headers["x-forwarded-for"] || req.headers["x-real-ip"],
+      userAgent: req.headers["user-agent"],
+    });
+    return res.status(401).json({
+      error: "Unauthorized",
+      message:
+        "Invalid or missing API secret. Provide Authorization: Bearer <secret> header, x-api-secret header, or ?secret=<secret> query parameter. For Vercel cron, add ?secret=<CRON_SECRET> to the cron path in vercel.json.",
+    });
   }
 
   const results: {

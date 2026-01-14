@@ -57,7 +57,11 @@ const apifySchema = z.object({
   finnkode: z.string().optional(),
 });
 
-async function handleApifyJob(request: any, reply: any, source: string | null) {
+export async function handleApifyJob(
+  request: any,
+  reply: any,
+  source: string | null
+) {
   const parsed = apifySchema.safeParse(request.body);
   if (!parsed.success) {
     reply
