@@ -12,7 +12,7 @@ import {
 import { buildCompanyKey, buildPersonKey } from "../lib/keys";
 import {
   upsertCompanySmart,
-  upsertJobPosts,
+  upsertJobPostSmart,
   upsertPeople,
   upsertJobPostPeople,
   upsertCompanyPeople,
@@ -136,16 +136,9 @@ export async function handleApifyJob(
     raw_payload: payload,
   };
 
-  // Upsert job post and get its ID
-  const jobResult = await upsertJobPosts([job]);
-  const jobPostId = jobResult.records[0]?.id;
-  if (!jobPostId) {
-    reply.status(500).send({
-      error: "Internal Server Error",
-      message: "Failed to get job post ID after upsert",
-    });
-    return;
-  }
+  // Upsert job post (appends source if job already exists from another scraper)
+  const jobResult = await upsertJobPostSmart(job);
+  const jobPostId = jobResult.id;
 
   const people: PersonRecord[] = payload.contactPersons.map((p) => {
     const personKey = buildPersonKey({
@@ -243,7 +236,10 @@ export async function handleApifyJob(
       updated: companyResult.isNew ? 0 : 1,
       matched_existing: !companyResult.isNew,
     },
-    job_posts: jobResult,
+    job_posts: {
+      inserted: jobResult.isNew ? 1 : 0,
+      updated: jobResult.isNew ? 0 : 1,
+    },
     people: peopleResult,
     job_post_people: await upsertJobPostPeople(allJobPersonLinks),
     company_people: await upsertCompanyPeople(companyPersonLinks),

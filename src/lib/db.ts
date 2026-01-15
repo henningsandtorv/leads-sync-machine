@@ -263,6 +263,60 @@ export async function upsertJobPosts(records: JobPostRecord[]) {
   });
 }
 
+/**
+ * Smart upsert for a single job post that appends sources instead of overwriting.
+ * If job exists and has a different source, combines them as "source1,source2".
+ */
+export async function upsertJobPostSmart(
+  record: JobPostRecord
+): Promise<{ id: string; isNew: boolean }> {
+  // Check if job post already exists
+  const { data: existing, error: fetchError } = await supabase
+    .from("job_posts")
+    .select("id, source")
+    .eq("finn_id", record.finn_id)
+    .single();
+
+  if (fetchError && fetchError.code !== "PGRST116") {
+    // PGRST116 = no rows returned, which is fine
+    throw fetchError;
+  }
+
+  if (existing) {
+    // Job post exists - merge sources if different
+    const existingSources = new Set(
+      (existing.source || "").split(",").map((s: string) => s.trim()).filter(Boolean)
+    );
+    const newSource = record.source?.trim();
+
+    if (newSource && !existingSources.has(newSource)) {
+      existingSources.add(newSource);
+    }
+
+    const mergedSource = Array.from(existingSources).sort().join(",") || null;
+
+    // Update with merged source (only update source, preserve other data)
+    const { error: updateError } = await supabase
+      .from("job_posts")
+      .update({ source: mergedSource })
+      .eq("id", existing.id);
+
+    if (updateError) throw updateError;
+
+    return { id: existing.id, isNew: false };
+  }
+
+  // New job post - insert it
+  const { data, error } = await supabase
+    .from("job_posts")
+    .insert([record])
+    .select("id")
+    .single();
+
+  if (error) throw error;
+  return { id: data.id, isNew: true };
+}
+
 // Helper functions to look up IDs from keys
 export async function getCompanyIdByKey(
   companyKey: string
