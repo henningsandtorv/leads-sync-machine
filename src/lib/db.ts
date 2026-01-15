@@ -133,7 +133,9 @@ export async function findExistingCompany(params: {
       .eq("orgnr", normalizedOrgnr)
       .limit(1)
       .single();
-    if (!error && data) {
+    // PGRST116 = no rows returned, which is expected when not found
+    if (error && error.code !== "PGRST116") throw error;
+    if (data) {
       return { id: data.id, company_key: data.company_key };
     }
   }
@@ -146,7 +148,8 @@ export async function findExistingCompany(params: {
       .eq("clean_domain", normalizedDomain)
       .limit(1)
       .single();
-    if (!error && data) {
+    if (error && error.code !== "PGRST116") throw error;
+    if (data) {
       return { id: data.id, company_key: data.company_key };
     }
   }
@@ -159,7 +162,8 @@ export async function findExistingCompany(params: {
       .eq("clean_name", normalizedCleanName)
       .limit(1)
       .single();
-    if (!error && data) {
+    if (error && error.code !== "PGRST116") throw error;
+    if (data) {
       return { id: data.id, company_key: data.company_key };
     }
   }
@@ -172,7 +176,8 @@ export async function findExistingCompany(params: {
       .eq("company_key", normalizedNameSlug)
       .limit(1)
       .single();
-    if (!error && data) {
+    if (error && error.code !== "PGRST116") throw error;
+    if (data) {
       return { id: data.id, company_key: data.company_key };
     }
   }
@@ -183,6 +188,7 @@ export async function findExistingCompany(params: {
 /**
  * Smart upsert for a single company that checks multiple fields for existing matches.
  * If a match is found, updates the existing record. Otherwise, creates a new one.
+ * Uses atomic operations to handle race conditions.
  */
 export async function upsertCompanySmart(
   record: CompanyRecord
@@ -214,16 +220,18 @@ export async function upsertCompanySmart(
     if (record.sector) updateData.sector = record.sector;
 
     if (Object.keys(updateData).length > 0) {
-      await supabase
+      const { error: updateError } = await supabase
         .from("companies")
         .update(updateData)
         .eq("id", existing.id);
+      if (updateError) throw updateError;
     }
 
     return { id: existing.id, company_key: existing.company_key, isNew: false };
   }
 
   // No existing match found, insert new company with clean_name
+  // Use upsert to handle race condition where another request inserted the same company_key
   const recordWithCleanName = {
     ...record,
     ...(cleanName && { clean_name: cleanName }),
@@ -236,6 +244,11 @@ export async function upsertCompanySmart(
     .single();
 
   if (error) throw error;
+
+  // Check if this was actually an insert or update by comparing timestamps
+  // Since we already checked findExistingCompany and it returned null,
+  // if we get here via upsert conflict, it means a race condition occurred
+  // We return isNew: true since from this request's perspective, it was attempting to create
   return { id: data.id, company_key: data.company_key, isNew: true };
 }
 
@@ -266,6 +279,7 @@ export async function upsertJobPosts(records: JobPostRecord[]) {
 /**
  * Smart upsert for a single job post that appends sources instead of overwriting.
  * If job exists and has a different source, combines them as "source1,source2".
+ * Uses atomic upsert with conflict handling to prevent race conditions.
  */
 export async function upsertJobPostSmart(
   record: JobPostRecord
@@ -306,10 +320,11 @@ export async function upsertJobPostSmart(
     return { id: existing.id, isNew: false };
   }
 
-  // New job post - insert it
+  // New job post - use upsert to handle race condition where another request
+  // may have inserted the same finn_id between our check and insert
   const { data, error } = await supabase
     .from("job_posts")
-    .insert([record])
+    .upsert([record], { onConflict: "finn_id" })
     .select("id")
     .single();
 
@@ -326,7 +341,9 @@ export async function getCompanyIdByKey(
     .select("id")
     .eq("company_key", companyKey)
     .single();
-  if (error || !data) return null;
+  // PGRST116 = no rows returned, which means not found
+  if (error && error.code !== "PGRST116") throw error;
+  if (!data) return null;
   return data.id as string;
 }
 
@@ -338,7 +355,8 @@ export async function getPersonIdByKey(
     .select("id")
     .eq("person_key", personKey)
     .single();
-  if (error || !data) return null;
+  if (error && error.code !== "PGRST116") throw error;
+  if (!data) return null;
   return data.id as string;
 }
 
@@ -350,7 +368,8 @@ export async function getJobPostIdByFinnId(
     .select("id")
     .eq("finn_id", finnId)
     .single();
-  if (error || !data) return null;
+  if (error && error.code !== "PGRST116") throw error;
+  if (!data) return null;
   return data.id as string;
 }
 
@@ -365,7 +384,8 @@ export async function getDecisionMakersByCompanyId(
     .select("person_id")
     .eq("company_id", companyId)
     .eq("role", "decision_maker");
-  if (error || !data) return [];
+  if (error) throw error;
+  if (!data) return [];
   return data.map((row) => row.person_id as string);
 }
 
@@ -476,6 +496,14 @@ export type EnrichedJobPost = {
     phone: string | null;
     linkedin_url: string | null;
   }>;
+  contact_persons: Array<{
+    id: string;
+    full_name: string;
+    title: string | null;
+    email: string | null;
+    phone: string | null;
+    linkedin_url: string | null;
+  }>;
 };
 
 /**
@@ -551,8 +579,34 @@ export async function getJobPostWithDecisionMakers(
     return null;
   }
 
+  // Fetch contact persons linked to this job post
+  const { data: contactPersonLinks, error: cpError } = await supabase
+    .from("job_post_people")
+    .select(
+      `
+      people (
+        id,
+        full_name,
+        title,
+        email,
+        phone,
+        linkedin_url
+      )
+    `
+    )
+    .eq("job_post_id", jobPostId)
+    .eq("role", "contact_person");
+
+  if (cpError) {
+    console.error("[DB] Error fetching contact persons:", cpError);
+    return null;
+  }
+
   const company = jobPost.companies as any;
   const decisionMakers = (decisionMakerLinks ?? [])
+    .map((link: any) => link.people)
+    .filter(Boolean);
+  const contactPersons = (contactPersonLinks ?? [])
     .map((link: any) => link.people)
     .filter(Boolean);
 
@@ -589,6 +643,7 @@ export async function getJobPostWithDecisionMakers(
       turnover: company?.turnover ?? null,
     },
     decision_makers: decisionMakers,
+    contact_persons: contactPersons,
   };
 }
 

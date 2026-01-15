@@ -289,6 +289,13 @@ export async function handleApifyJob(
               phone: dm.phone,
               linkedin_url: dm.linkedin_url,
             })),
+            contact_persons: enrichedJobPost.contact_persons.map((cp) => ({
+              full_name: cp.full_name,
+              title: cp.title,
+              email: cp.email,
+              phone: cp.phone,
+              linkedin_url: cp.linkedin_url,
+            })),
           };
           await sendToClayWebhook(clayPayload);
         }

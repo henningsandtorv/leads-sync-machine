@@ -2,13 +2,16 @@
  * Clay.com webhook client for pushing job posts with decision makers
  */
 
-export type ClayDecisionMaker = {
+export type ClayPerson = {
   full_name: string;
   title: string | null;
   email: string | null;
   phone: string | null;
   linkedin_url: string | null;
 };
+
+/** @deprecated Use ClayPerson instead */
+export type ClayDecisionMaker = ClayPerson;
 
 export type ClayJobPostPayload = {
   job_post: {
@@ -39,7 +42,8 @@ export type ClayJobPostPayload = {
     profit_before_tax: string | null;
     turnover: string | null;
   };
-  decision_makers: ClayDecisionMaker[];
+  decision_makers: ClayPerson[];
+  contact_persons: ClayPerson[];
 };
 
 const CLAY_WEBHOOK_URL = process.env.CLAY_WEBHOOK_URL;
