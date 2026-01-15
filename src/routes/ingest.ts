@@ -7,23 +7,26 @@ import {
   normalizeEmail,
   normalizeDate,
   classifyPersonRole,
-  normalizeNameForComparison,
+  normalizeCompanyNameForMatching,
 } from "../lib/normalize";
 import { buildCompanyKey, buildPersonKey } from "../lib/keys";
 import {
-  upsertCompanies,
+  upsertCompanySmart,
   upsertJobPosts,
   upsertPeople,
   upsertJobPostPeople,
   upsertCompanyPeople,
-  getCompanyIdByKey,
-  getPersonIdByKey,
-  getJobPostIdByFinnId,
   getDecisionMakersByCompanyId,
+  getJobPostWithDecisionMakers,
   CompanyRecord,
   PersonRecord,
   JobPostRecord,
 } from "../lib/db";
+import {
+  sendToClayWebhook,
+  isClayWebhookEnabled,
+  ClayJobPostPayload,
+} from "../lib/clay";
 
 const apifySchema = z.object({
   url: z.string().url(),
@@ -104,16 +107,10 @@ export async function handleApifyJob(
     ...(payload.location && { location: payload.location }),
   };
 
-  // Upsert company and get its ID
-  const companyResult = await upsertCompanies([company]);
-  const companyId = companyResult.records[0]?.id;
-  if (!companyId) {
-    reply.status(500).send({
-      error: "Internal Server Error",
-      message: "Failed to get company ID after upsert",
-    });
-    return;
-  }
+  // Upsert company using smart matching (checks orgnr, clean_domain, name)
+  const companyResult = await upsertCompanySmart(company);
+  const companyId = companyResult.id;
+  const actualCompanyKey = companyResult.company_key; // May differ from buildCompanyKey if matched existing
 
   const job: JobPostRecord = {
     finn_id: finnId,
@@ -155,13 +152,13 @@ export async function handleApifyJob(
       linkedin_url: p.linkedin,
       email: p.email,
       phone: p.phoneNumber,
-      company_key: companyKey,
+      company_key: actualCompanyKey, // Use actual company key (may be from existing record)
       company_name: payload.company, // Pass company name for name-based keys
       full_name: p.name,
     });
 
-    // Normalize company name for people record
-    const normalizedCompanyName = normalizeNameForComparison(payload.company);
+    // Normalize company name for people record (same function used for companies.clean_name)
+    const normalizedCompanyName = normalizeCompanyNameForMatching(payload.company);
 
     return {
       person_key: personKey,
@@ -241,13 +238,69 @@ export async function handleApifyJob(
   const allJobPersonLinks = [...jobPersonLinks, ...decisionMakerLinks];
 
   const results = {
-    companies: companyResult,
+    companies: {
+      inserted: companyResult.isNew ? 1 : 0,
+      updated: companyResult.isNew ? 0 : 1,
+      matched_existing: !companyResult.isNew,
+    },
     job_posts: jobResult,
     people: peopleResult,
     job_post_people: await upsertJobPostPeople(allJobPersonLinks),
     company_people: await upsertCompanyPeople(companyPersonLinks),
     decision_makers_linked: decisionMakerLinks.length,
   };
+
+  // Send to Clay webhook (fire-and-forget, don't block the response)
+  if (isClayWebhookEnabled()) {
+    // Use setImmediate to not block the response
+    setImmediate(async () => {
+      try {
+        const enrichedJobPost = await getJobPostWithDecisionMakers(jobPostId);
+        if (enrichedJobPost) {
+          const clayPayload: ClayJobPostPayload = {
+            job_post: {
+              finn_id: enrichedJobPost.job_post.finn_id,
+              finn_url: enrichedJobPost.job_post.finn_url,
+              title: enrichedJobPost.job_post.title,
+              description: enrichedJobPost.job_post.description,
+              location: enrichedJobPost.job_post.location,
+              employment_type: enrichedJobPost.job_post.employment_type,
+              salary: enrichedJobPost.job_post.salary,
+              publication_date: enrichedJobPost.job_post.publication_date,
+              expiration_date: enrichedJobPost.job_post.expiration_date,
+              application_url: enrichedJobPost.job_post.application_url,
+              sector: enrichedJobPost.job_post.sector,
+              industries: enrichedJobPost.job_post.industries,
+              source: enrichedJobPost.job_post.source,
+            },
+            company: {
+              name: enrichedJobPost.company.name,
+              domain: enrichedJobPost.company.domain,
+              clean_domain: enrichedJobPost.company.clean_domain,
+              orgnr: enrichedJobPost.company.orgnr,
+              proff_url: enrichedJobPost.company.proff_url,
+              industry: enrichedJobPost.company.industry,
+              company_size: enrichedJobPost.company.company_size,
+              location: enrichedJobPost.company.location,
+              sector: enrichedJobPost.company.sector,
+              profit_before_tax: enrichedJobPost.company.profit_before_tax,
+              turnover: enrichedJobPost.company.turnover,
+            },
+            decision_makers: enrichedJobPost.decision_makers.map((dm) => ({
+              full_name: dm.full_name,
+              title: dm.title,
+              email: dm.email,
+              phone: dm.phone,
+              linkedin_url: dm.linkedin_url,
+            })),
+          };
+          await sendToClayWebhook(clayPayload);
+        }
+      } catch (error) {
+        console.error("[Clay] Error sending webhook:", error);
+      }
+    });
+  }
 
   reply.send(results);
 }

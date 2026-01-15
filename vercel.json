@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/apify-import",
       "schedule": "30 12 * * *"
+    },
+    {
+      "path": "/cron/clay-sync",
+      "schedule": "0 13 * * *"
     }
   ]
 }

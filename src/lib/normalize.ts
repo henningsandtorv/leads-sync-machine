@@ -140,6 +140,66 @@ export function normalizeNameForComparison(
 }
 
 /**
+ * Normalizes company name for matching by stripping common legal suffixes.
+ * Handles Norwegian and international company types:
+ * - AS, ASA, A/S (Norwegian)
+ * - Ltd, Limited, Inc, Corp, Corporation, LLC, GmbH, etc.
+ *
+ * Example: "AKVA Group ASA" -> "akvagroup"
+ *          "AKVA group" -> "akvagroup"
+ */
+export function normalizeCompanyNameForMatching(
+  name?: string | null
+): string | null {
+  if (!name) return null;
+
+  let normalized = name.trim().toLowerCase();
+
+  // Remove common legal suffixes (order matters - longer ones first)
+  const suffixes = [
+    // Norwegian
+    "\\s+asa$",
+    "\\s+a/s$",
+    "\\s+as$",
+    "\\s+ans$",
+    "\\s+da$",
+    "\\s+ba$",
+    "\\s+sa$",
+    "\\s+nuf$",
+    "\\s+ks$",
+    // International
+    "\\s+corporation$",
+    "\\s+incorporated$",
+    "\\s+limited$",
+    "\\s+company$",
+    "\\s+corp\\.?$",
+    "\\s+inc\\.?$",
+    "\\s+ltd\\.?$",
+    "\\s+llc$",
+    "\\s+llp$",
+    "\\s+gmbh$",
+    "\\s+ag$",
+    "\\s+bv$",
+    "\\s+nv$",
+    "\\s+plc$",
+    "\\s+co\\.?$",
+    // Generic
+    "\\s+group$",
+    "\\s+holding$",
+    "\\s+holdings$",
+  ];
+
+  for (const suffix of suffixes) {
+    normalized = normalized.replace(new RegExp(suffix, "i"), "");
+  }
+
+  // Remove all non-alphanumeric characters and collapse to single string
+  normalized = normalized.replace(/[^a-z0-9æøåäöü]+/g, "");
+
+  return normalized || null;
+}
+
+/**
  * Normalizes date strings to ISO 8601 format for PostgreSQL.
  * Handles Norwegian date formats (DD.MM.YYYY) and non-date values like "Snarest".
  */
