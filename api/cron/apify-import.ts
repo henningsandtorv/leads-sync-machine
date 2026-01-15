@@ -97,49 +97,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!CRON_SECRET) {
     console.error("CRON_SECRET environment variable is not set");
     return res.status(500).json({
-      error: "Server configuration error: CRON_SECRET not configured",
+      error: "Internal server error",
     });
   }
 
-  // Check if this is a Vercel cron job (internal request)
-  // Vercel cron jobs may include x-vercel-cron header or come from internal network
-  const isVercelCron =
-    !!req.headers["x-vercel-cron"] ||
-    !!req.headers["x-vercel-signature"] ||
-    req.url?.includes("?secret="); // If secret is in query, it's likely from cron config
-
-  // Check Authorization header (Bearer token) - primary method for external calls
+  // Authentication: Accept Vercel Cron header OR Authorization Bearer token
+  // Vercel automatically adds Authorization header with CRON_SECRET for cron jobs
+  // See: https://vercel.com/docs/cron-jobs/manage-cron-jobs#securing-cron-jobs
   const authHeader = req.headers.authorization;
   const providedSecret = authHeader?.replace(/^Bearer\s+/i, "");
 
-  // Also check for x-api-secret header (alternative method)
-  const apiSecretHeader = req.headers["x-api-secret"] as string | undefined;
-
-  // Check query parameter secret (for Vercel cron jobs - add ?secret=<CRON_SECRET> to cron path in vercel.json)
-  const querySecret = req.query.secret as string | undefined;
-
-  // Verify authentication:
-  // 1. Valid secret provided via any method (header or query)
-  // 2. For Vercel cron, query parameter is acceptable; for external, prefer headers
-  const isValidSecret =
-    providedSecret === CRON_SECRET ||
-    apiSecretHeader === CRON_SECRET ||
-    querySecret === CRON_SECRET;
-
-  if (!isValidSecret) {
+  if (providedSecret !== CRON_SECRET) {
     console.warn("Unauthorized cron job attempt", {
-      isVercelCron,
-      hasAuthHeader: !!authHeader,
-      hasApiSecretHeader: !!apiSecretHeader,
-      hasQuerySecret: !!querySecret,
-      url: req.url,
       ip: req.headers["x-forwarded-for"] || req.headers["x-real-ip"],
-      userAgent: req.headers["user-agent"],
     });
     return res.status(401).json({
       error: "Unauthorized",
-      message:
-        "Invalid or missing API secret. Provide Authorization: Bearer <secret> header, x-api-secret header, or ?secret=<secret> query parameter. For Vercel cron, add ?secret=<CRON_SECRET> to the cron path in vercel.json.",
     });
   }
 
@@ -191,7 +164,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error("Cron job failed:", error);
     return res.status(500).json({
       success: false,
-      error: error.message,
+      error: "Internal server error",
     });
   }
 }
