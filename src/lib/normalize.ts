@@ -63,19 +63,32 @@ export function normalizeEmail(email?: string | null): string | null {
 
 export function normalizePhone(phone?: string | null): string | null {
   if (!phone) return null;
-  const digits = phone.replace(/\D+/g, "");
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/\D+/g, "");
   if (!digits) return null;
 
-  // Handle Norwegian numbers: remove country code if present
-  // "+47 95 46 76 01" -> "4795467601" -> "95467601" (if 8 digits after removing 47)
-  // "95 46 76 01" -> "95467601"
-  if (digits.startsWith("47") && digits.length === 10) {
-    // Norwegian number with country code, remove it
+  // Handle Norwegian numbers with country code
+  // Only strip +47/0047 prefix if the original input clearly indicates a country code
+  // This avoids ambiguity with numbers that legitimately start with "47"
+  const hasCountryCodeIndicator =
+    trimmed.startsWith("+47") ||
+    trimmed.startsWith("0047") ||
+    trimmed.startsWith("47 ") || // Space after 47 suggests country code
+    trimmed.startsWith("47-"); // Dash after 47 suggests country code
+
+  if (hasCountryCodeIndicator && digits.startsWith("47") && digits.length === 10) {
+    // Norwegian number with explicit country code, remove it
     return digits.substring(2);
   }
 
-  // If it's 8 digits and starts with 4, 9, or 8, it's likely a Norwegian mobile number
-  // Keep as-is
+  // Handle 00 prefix (international dialing)
+  if (digits.startsWith("0047") && digits.length === 12) {
+    return digits.substring(4);
+  }
+
+  // If it's already 8 digits, assume it's a valid Norwegian number
+  // Norwegian mobile numbers start with 4, 9, or 8
+  // Norwegian landlines start with 2, 3, 5, 6, or 7
   return digits;
 }
 
@@ -196,6 +209,7 @@ export function classifyPersonRole(
   const normalizedTitle = title.toLowerCase().trim();
 
   // Decision maker keywords (executives, managers, directors, owners)
+  // Using word boundary patterns where needed to avoid false positives
   const decisionMakerKeywords = [
     "ceo",
     "chief executive",
@@ -217,26 +231,29 @@ export function classifyPersonRole(
     "vp",
     "vice president",
     "vice-president",
-    "head of",
-    "head",
-    "lead",
+    "head of", // "head of" is specific enough
+    "team lead",
+    "tech lead",
+    "engineering lead",
+    "project lead",
     "manager",
     "senior manager",
-    "general manager",
     "partner",
     "principal",
     "executive",
-    "it",
+    "it manager",
+    "it director",
+    "it chef",
     // Norwegian decision maker titles
     "daglig leder",
-    "sjef",
+    "sjef", // Norwegian for "boss/chief" - usually specific enough
     "direktør",
     "administrerende direktør",
     "adm. direktør",
     "styreleder",
     "eier",
     "gründer",
-    "leder",
+    "leder", // Note: this is common in Norwegian titles like "avdelingsleder"
     "avdelingsleder",
     "prosjektleder",
     "teamleder",

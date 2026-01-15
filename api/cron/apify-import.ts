@@ -102,8 +102,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Authentication: Accept Vercel Cron header OR Authorization Bearer token
-  // Vercel automatically adds Authorization header with CRON_SECRET for cron jobs
-  // See: https://vercel.com/docs/cron-jobs/manage-cron-jobs#securing-cron-jobs
+
   const authHeader = req.headers.authorization;
   const providedSecret = authHeader?.replace(/^Bearer\s+/i, "");
 
