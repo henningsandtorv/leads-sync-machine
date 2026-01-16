@@ -48,6 +48,50 @@ export type ClayJobPostPayload = {
   contact_persons_formatted: string | null;
 };
 
+const CLAY_CELL_MAX_BYTES = 6000; // Clay limit is 8KB, use 6KB for safety
+
+/**
+ * Truncate description to fit within Clay cell limits while preserving key info.
+ * Tries to break at paragraph or sentence boundaries.
+ */
+export function truncateDescription(
+  description: string | null
+): string | null {
+  if (!description) return null;
+
+  const bytes = Buffer.byteLength(description, "utf8");
+  if (bytes <= CLAY_CELL_MAX_BYTES) return description;
+
+  // Find a good cutoff point within the limit
+  let cutoff = CLAY_CELL_MAX_BYTES;
+
+  // Work backwards to find a safe UTF-8 boundary
+  while (cutoff > 0 && Buffer.byteLength(description.slice(0, cutoff), "utf8") > CLAY_CELL_MAX_BYTES) {
+    cutoff--;
+  }
+
+  let truncated = description.slice(0, cutoff);
+
+  // Try to break at paragraph boundary
+  const lastParagraph = truncated.lastIndexOf("\n\n");
+  if (lastParagraph > cutoff * 0.7) {
+    truncated = truncated.slice(0, lastParagraph);
+  } else {
+    // Try to break at sentence boundary
+    const lastSentence = Math.max(
+      truncated.lastIndexOf(". "),
+      truncated.lastIndexOf(".\n"),
+      truncated.lastIndexOf("? "),
+      truncated.lastIndexOf("! ")
+    );
+    if (lastSentence > cutoff * 0.7) {
+      truncated = truncated.slice(0, lastSentence + 1);
+    }
+  }
+
+  return truncated.trim() + "\n\n[...]";
+}
+
 /**
  * Format a single person as a compact single line
  * Format: Name, Title, email, phone, linkedin

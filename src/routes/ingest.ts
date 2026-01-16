@@ -27,6 +27,7 @@ import {
   isClayWebhookEnabled,
   ClayJobPostPayload,
   formatPersonsCompact,
+  truncateDescription,
 } from "../lib/clay";
 
 const apifySchema = z.object({
@@ -259,7 +260,7 @@ export async function handleApifyJob(
               finn_id: enrichedJobPost.job_post.finn_id,
               finn_url: enrichedJobPost.job_post.finn_url,
               title: enrichedJobPost.job_post.title,
-              description: enrichedJobPost.job_post.description,
+              description: truncateDescription(enrichedJobPost.job_post.description),
               location: enrichedJobPost.job_post.location,
               employment_type: enrichedJobPost.job_post.employment_type,
               salary: enrichedJobPost.job_post.salary,
