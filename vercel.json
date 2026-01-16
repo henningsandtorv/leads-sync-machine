@@ -6,7 +6,7 @@
     },
     {
       "path": "/cron/clay-sync",
-      "schedule": "0 13 * * *"
+      "schedule": "30 10 * * *"
     }
   ]
 }
