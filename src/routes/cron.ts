@@ -7,6 +7,7 @@ import {
   sendBatchToClayWebhook,
   isClayWebhookEnabled,
   ClayJobPostPayload,
+  formatPersonsCompact,
 } from "../lib/clay";
 
 export default async function cronRoutes(
@@ -86,6 +87,10 @@ export default async function cronRoutes(
           phone: cp.phone,
           linkedin_url: cp.linkedin_url,
         })),
+        people_formatted: formatPersonsCompact(
+          enrichedJobPost.contact_persons,
+          enrichedJobPost.decision_makers
+        ),
       });
     }
 

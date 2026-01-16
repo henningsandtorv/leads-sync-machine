@@ -26,6 +26,7 @@ import {
   sendToClayWebhook,
   isClayWebhookEnabled,
   ClayJobPostPayload,
+  formatPersonsCompact,
 } from "../lib/clay";
 
 const apifySchema = z.object({
@@ -296,6 +297,10 @@ export async function handleApifyJob(
               phone: cp.phone,
               linkedin_url: cp.linkedin_url,
             })),
+            people_formatted: formatPersonsCompact(
+              enrichedJobPost.contact_persons,
+              enrichedJobPost.decision_makers
+            ),
           };
           await sendToClayWebhook(clayPayload);
         }
