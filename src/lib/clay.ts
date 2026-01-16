@@ -44,45 +44,30 @@ export type ClayJobPostPayload = {
   };
   decision_makers: ClayPerson[];
   contact_persons: ClayPerson[];
-  people_formatted: string | null;
+  decision_makers_formatted: string | null;
+  contact_persons_formatted: string | null;
 };
 
 /**
  * Format a single person as a compact single line
- * Format: [C] or [D] Name, Title, email, phone, linkedin
+ * Format: Name, Title, email, phone, linkedin
  */
-function formatPersonLine(
-  person: ClayPerson,
-  role: "C" | "D"
-): string {
+function formatPersonLine(person: ClayPerson): string {
   const parts = [person.full_name];
   if (person.title) parts.push(person.title);
   if (person.email) parts.push(person.email);
   if (person.phone) parts.push(person.phone);
   if (person.linkedin_url) parts.push(person.linkedin_url);
-  return `[${role}] ${parts.join(", ")}`;
+  return parts.join(", ");
 }
 
 /**
- * Format all contact persons and decision makers into a single text field
- * Using compact single line format:
- * [C] = Contact Person, [D] = Decision Maker
+ * Format a list of persons into a compact text field
+ * Each person on a new line with: Name, Title, email, phone, linkedin
  */
-export function formatPersonsCompact(
-  contactPersons: ClayPerson[],
-  decisionMakers: ClayPerson[]
-): string | null {
-  const lines: string[] = [];
-
-  for (const cp of contactPersons) {
-    lines.push(formatPersonLine(cp, "C"));
-  }
-
-  for (const dm of decisionMakers) {
-    lines.push(formatPersonLine(dm, "D"));
-  }
-
-  return lines.length > 0 ? lines.join("\n") : null;
+export function formatPersonsCompact(persons: ClayPerson[]): string | null {
+  if (persons.length === 0) return null;
+  return persons.map(formatPersonLine).join("\n");
 }
 
 const CLAY_WEBHOOK_URL = process.env.CLAY_WEBHOOK_URL;

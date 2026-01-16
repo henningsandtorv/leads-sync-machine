@@ -297,9 +297,11 @@ export async function handleApifyJob(
               phone: cp.phone,
               linkedin_url: cp.linkedin_url,
             })),
-            people_formatted: formatPersonsCompact(
-              enrichedJobPost.contact_persons,
+            decision_makers_formatted: formatPersonsCompact(
               enrichedJobPost.decision_makers
+            ),
+            contact_persons_formatted: formatPersonsCompact(
+              enrichedJobPost.contact_persons
             ),
           };
           await sendToClayWebhook(clayPayload);
