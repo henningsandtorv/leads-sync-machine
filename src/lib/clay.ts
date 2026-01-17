@@ -12,13 +12,18 @@ import { z } from "zod";
 const emptyToNull = z.string().transform((val) => (val === "" ? null : val));
 const optionalString = emptyToNull.nullable().optional();
 
+// Schema for person - full_name is required but we allow empty string for filtering
 const ClayEnrichedPersonSchema = z.object({
-  full_name: z.string().min(1),
+  full_name: z.string(),
   title: optionalString,
   email: optionalString,
   phone: optionalString,
   linkedin_url: optionalString,
 });
+
+// Filter out people with empty full_name (Clay sends empty objects when no decision maker found)
+const filterEmptyPeople = (people: z.infer<typeof ClayEnrichedPersonSchema>[]) =>
+  people.filter((p) => p.full_name && p.full_name.trim() !== "");
 
 const ClayEnrichedCompanySchema = z.object({
   // Identifiers
@@ -40,10 +45,10 @@ export const ClayEnrichmentPayloadSchema = z.object({
   finn_id: z.string().min(1),
   // Enriched company data
   company: ClayEnrichedCompanySchema.optional(),
-  // New decision makers found by Clay
-  decision_makers: z.array(ClayEnrichedPersonSchema).default([]),
-  // Enriched contact person data
-  contact_persons: z.array(ClayEnrichedPersonSchema).default([]),
+  // New decision makers found by Clay (filter out empty entries)
+  decision_makers: z.array(ClayEnrichedPersonSchema).default([]).transform(filterEmptyPeople),
+  // Enriched contact person data (filter out empty entries)
+  contact_persons: z.array(ClayEnrichedPersonSchema).default([]).transform(filterEmptyPeople),
 });
 
 export type ClayEnrichmentPayload = z.infer<typeof ClayEnrichmentPayloadSchema>;
