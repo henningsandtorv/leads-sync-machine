@@ -5,6 +5,7 @@ import rateLimit from "@fastify/rate-limit";
 import importRoutes from "./routes/import";
 import ingestRoutes from "./routes/ingest";
 import cronRoutes from "./routes/cron";
+import clayEnrichmentRoutes from "./routes/clay-enrichment";
 
 const PORT = Number(process.env.PORT || 3000);
 
@@ -22,6 +23,7 @@ async function buildServer() {
   await app.register(importRoutes, { prefix: "/import" });
   await app.register(ingestRoutes, { prefix: "/ingest" });
   await app.register(cronRoutes, { prefix: "/cron" });
+  await app.register(clayEnrichmentRoutes, { prefix: "/ingest" });
 
   app.setErrorHandler((err, req, reply) => {
     req.log.error({ err }, "Request failed");

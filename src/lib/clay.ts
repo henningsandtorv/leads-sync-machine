@@ -2,6 +2,53 @@
  * Clay.com webhook client for pushing job posts with decision makers
  */
 
+import { z } from "zod";
+
+// ============================================================
+// Incoming Clay Enrichment Payload Schema (FROM Clay)
+// ============================================================
+
+const ClayEnrichedPersonSchema = z.object({
+  full_name: z.string().min(1),
+  title: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  phone: z.string().nullable().optional(),
+  linkedin_url: z.string().nullable().optional(),
+});
+
+const ClayEnrichedCompanySchema = z.object({
+  // Identifiers
+  name: z.string().nullable().optional(),
+  domain: z.string().nullable().optional(),
+  orgnr: z.string().nullable().optional(),
+  // Enrichable fields
+  proff_url: z.string().nullable().optional(),
+  industry: z.string().nullable().optional(),
+  company_size: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
+  sector: z.string().nullable().optional(),
+  profit_before_tax: z.string().nullable().optional(),
+  turnover: z.string().nullable().optional(),
+});
+
+export const ClayEnrichmentPayloadSchema = z.object({
+  // Required anchor to find the company via job_posts
+  finn_id: z.string().min(1),
+  // Enriched company data
+  company: ClayEnrichedCompanySchema.optional(),
+  // New decision makers found by Clay
+  decision_makers: z.array(ClayEnrichedPersonSchema).default([]),
+  // Enriched contact person data
+  contact_persons: z.array(ClayEnrichedPersonSchema).default([]),
+});
+
+export type ClayEnrichmentPayload = z.infer<typeof ClayEnrichmentPayloadSchema>;
+export type ClayEnrichedPerson = z.infer<typeof ClayEnrichedPersonSchema>;
+
+// ============================================================
+// Outgoing Clay Payload Types (TO Clay)
+// ============================================================
+
 export type ClayPerson = {
   full_name: string;
   title: string | null;

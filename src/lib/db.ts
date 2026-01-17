@@ -4,6 +4,10 @@ import {
   nameSlug,
   normalizeOrgnr,
   normalizeCompanyNameForMatching,
+  normalizeNameForComparison,
+  canonicalizeLinkedInUrl,
+  normalizeEmail,
+  normalizePhone,
 } from "./normalize";
 
 export type CompanyRecord = {
@@ -667,4 +671,248 @@ export async function getRecentJobPostIds(
   }
 
   return (data ?? []).map((row) => row.id);
+}
+
+// ============================================================
+// Clay Enrichment Functions
+// ============================================================
+
+/**
+ * Get company ID and details from a job post's finn_id
+ */
+export async function getCompanyByJobPostFinnId(finnId: string): Promise<{
+  id: string;
+  company_key: string;
+  name: string | null;
+  clean_domain: string | null;
+} | null> {
+  const { data, error } = await supabase
+    .from("job_posts")
+    .select(
+      `
+      company_id,
+      companies (
+        id,
+        company_key,
+        name,
+        clean_domain
+      )
+    `
+    )
+    .eq("finn_id", finnId)
+    .single();
+
+  if (error && error.code !== "PGRST116") throw error;
+  if (!data || !data.companies) return null;
+
+  const company = data.companies as any;
+  return {
+    id: company.id,
+    company_key: company.company_key,
+    name: company.name,
+    clean_domain: company.clean_domain,
+  };
+}
+
+/**
+ * Update company with enriched data, only filling in missing fields.
+ * Returns list of fields that were updated.
+ */
+export async function updateCompanyEnrichment(
+  companyId: string,
+  enrichment: {
+    orgnr?: string | null;
+    domain?: string | null;
+    clean_domain?: string | null;
+    proff_url?: string | null;
+    industry?: string | null;
+    company_size?: string | null;
+    location?: string | null;
+    sector?: string | null;
+    profit_before_tax?: string | null;
+    turnover?: string | null;
+  }
+): Promise<{ fieldsUpdated: string[] }> {
+  // Fetch current company data
+  const { data: current, error: fetchError } = await supabase
+    .from("companies")
+    .select("*")
+    .eq("id", companyId)
+    .single();
+
+  if (fetchError) throw fetchError;
+
+  // Build update object - only include fields that have new values AND are currently empty
+  const updateData: Record<string, string> = {};
+  const fieldsUpdated: string[] = [];
+
+  const enrichableFields = [
+    "orgnr",
+    "domain",
+    "clean_domain",
+    "proff_url",
+    "industry",
+    "company_size",
+    "location",
+    "sector",
+    "profit_before_tax",
+    "turnover",
+  ] as const;
+
+  for (const field of enrichableFields) {
+    const enrichedValue = enrichment[field];
+    const currentValue = current[field];
+
+    // Only update if we have new data AND current is empty
+    if (enrichedValue && !currentValue) {
+      updateData[field] = enrichedValue;
+      fieldsUpdated.push(field);
+    }
+  }
+
+  if (Object.keys(updateData).length > 0) {
+    const { error: updateError } = await supabase
+      .from("companies")
+      .update(updateData)
+      .eq("id", companyId);
+
+    if (updateError) throw updateError;
+  }
+
+  return { fieldsUpdated };
+}
+
+/**
+ * Find existing person by matching criteria.
+ * Priority: linkedin_url > email > phone > company + full_name
+ */
+export async function findExistingPerson(params: {
+  linkedin_url?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  company_id?: string;
+  full_name?: string | null;
+}): Promise<{ id: string; person_key: string } | null> {
+  const { linkedin_url, email, phone, company_id, full_name } = params;
+
+  // Priority 1: LinkedIn URL
+  if (linkedin_url) {
+    const canonicalLinkedIn = canonicalizeLinkedInUrl(linkedin_url);
+    if (canonicalLinkedIn) {
+      const { data, error } = await supabase
+        .from("people")
+        .select("id, person_key")
+        .eq("linkedin_url", canonicalLinkedIn)
+        .limit(1)
+        .single();
+      if (error && error.code !== "PGRST116") throw error;
+      if (data) return { id: data.id, person_key: data.person_key };
+    }
+  }
+
+  // Priority 2: Email
+  if (email) {
+    const normalizedEmailVal = normalizeEmail(email);
+    if (normalizedEmailVal) {
+      const { data, error } = await supabase
+        .from("people")
+        .select("id, person_key")
+        .eq("email", normalizedEmailVal)
+        .limit(1)
+        .single();
+      if (error && error.code !== "PGRST116") throw error;
+      if (data) return { id: data.id, person_key: data.person_key };
+    }
+  }
+
+  // Priority 3: Phone
+  if (phone) {
+    const normalizedPhoneVal = normalizePhone(phone);
+    if (normalizedPhoneVal) {
+      const { data, error } = await supabase
+        .from("people")
+        .select("id, person_key")
+        .eq("phone", normalizedPhoneVal)
+        .limit(1)
+        .single();
+      if (error && error.code !== "PGRST116") throw error;
+      if (data) return { id: data.id, person_key: data.person_key };
+    }
+  }
+
+  // Priority 4: Company + Full Name (via company_people junction)
+  if (company_id && full_name) {
+    const normalizedName = normalizeNameForComparison(full_name);
+    if (normalizedName) {
+      const { data, error } = await supabase
+        .from("company_people")
+        .select(
+          `
+          person_id,
+          people!inner (id, person_key, full_name)
+        `
+        )
+        .eq("company_id", company_id);
+
+      if (error) throw error;
+
+      // Find matching person by normalized name
+      for (const link of data ?? []) {
+        const person = link.people as any;
+        if (normalizeNameForComparison(person.full_name) === normalizedName) {
+          return { id: person.id, person_key: person.person_key };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Update person with enriched data, only filling in missing fields.
+ * Returns list of fields that were updated.
+ */
+export async function updatePersonEnrichment(
+  personId: string,
+  enrichment: {
+    title?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    linkedin_url?: string | null;
+  }
+): Promise<{ fieldsUpdated: string[] }> {
+  const { data: current, error: fetchError } = await supabase
+    .from("people")
+    .select("*")
+    .eq("id", personId)
+    .single();
+
+  if (fetchError) throw fetchError;
+
+  const updateData: Record<string, string> = {};
+  const fieldsUpdated: string[] = [];
+
+  const enrichableFields = ["title", "email", "phone", "linkedin_url"] as const;
+
+  for (const field of enrichableFields) {
+    const enrichedValue = enrichment[field];
+    const currentValue = current[field];
+
+    if (enrichedValue && !currentValue) {
+      updateData[field] = enrichedValue;
+      fieldsUpdated.push(field);
+    }
+  }
+
+  if (Object.keys(updateData).length > 0) {
+    const { error: updateError } = await supabase
+      .from("people")
+      .update(updateData)
+      .eq("id", personId);
+
+    if (updateError) throw updateError;
+  }
+
+  return { fieldsUpdated };
 }
