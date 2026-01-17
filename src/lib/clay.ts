@@ -8,27 +8,31 @@ import { z } from "zod";
 // Incoming Clay Enrichment Payload Schema (FROM Clay)
 // ============================================================
 
+// Helper: Convert empty strings to null (Clay sends "" for missing fields)
+const emptyToNull = z.string().transform((val) => (val === "" ? null : val));
+const optionalString = emptyToNull.nullable().optional();
+
 const ClayEnrichedPersonSchema = z.object({
   full_name: z.string().min(1),
-  title: z.string().nullable().optional(),
-  email: z.string().nullable().optional(),
-  phone: z.string().nullable().optional(),
-  linkedin_url: z.string().nullable().optional(),
+  title: optionalString,
+  email: optionalString,
+  phone: optionalString,
+  linkedin_url: optionalString,
 });
 
 const ClayEnrichedCompanySchema = z.object({
   // Identifiers
-  name: z.string().nullable().optional(),
-  domain: z.string().nullable().optional(),
-  orgnr: z.string().nullable().optional(),
+  name: optionalString,
+  domain: optionalString,
+  orgnr: optionalString,
   // Enrichable fields
-  proff_url: z.string().nullable().optional(),
-  industry: z.string().nullable().optional(),
-  company_size: z.string().nullable().optional(),
-  location: z.string().nullable().optional(),
-  sector: z.string().nullable().optional(),
-  profit_before_tax: z.string().nullable().optional(),
-  turnover: z.string().nullable().optional(),
+  proff_url: optionalString,
+  industry: optionalString,
+  company_size: optionalString,
+  location: optionalString,
+  sector: optionalString,
+  profit_before_tax: optionalString,
+  turnover: optionalString,
 });
 
 export const ClayEnrichmentPayloadSchema = z.object({

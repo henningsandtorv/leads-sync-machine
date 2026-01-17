@@ -22,6 +22,7 @@ import {
   normalizeCompanyNameForMatching,
   normalizeDomainHost,
   canonicalizeLinkedInUrl,
+  extractFinnIdFromUrl,
 } from "../lib/normalize";
 import { buildPersonKey } from "../lib/keys";
 
@@ -57,16 +58,19 @@ async function handleClayEnrichment(
   };
 
   try {
+    // Extract finn_id from URL if full URL was provided (e.g., "https://www.finn.no/job/ad/446256409" → "446256409")
+    const finnId = extractFinnIdFromUrl(payload.finn_id) || payload.finn_id;
+
     // Step 1: Find the company via finn_id
-    const company = await getCompanyByJobPostFinnId(payload.finn_id);
+    const company = await getCompanyByJobPostFinnId(finnId);
     if (!company) {
-      stats.errors.push(`No company found for finn_id: ${payload.finn_id}`);
+      stats.errors.push(`No company found for finn_id: ${finnId}`);
       return stats;
     }
     stats.company.found = true;
 
     const companyId = company.id;
-    const jobPostId = await getJobPostIdByFinnId(payload.finn_id);
+    const jobPostId = await getJobPostIdByFinnId(finnId);
 
     // Step 2: Update company with enriched data
     if (payload.company) {
