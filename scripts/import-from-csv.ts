@@ -569,6 +569,7 @@ async function upsertPeople(rows: CsvPerson[]) {
         linkedin_url: normalizedLinkedIn,
         email: normalizedEmail,
         phone: normalizedPhone,
+        company_domain: row.normalized_company_domain || undefined,
         company_key: null,
         company_name: row.normalized_company_name || undefined,
         full_name: row.full_name,

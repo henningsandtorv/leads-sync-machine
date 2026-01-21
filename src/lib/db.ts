@@ -870,6 +870,45 @@ export async function findExistingPerson(params: {
 }
 
 /**
+ * Find existing person by normalized name + domain.
+ * Used to prevent duplicates when one record has phone and another doesn't.
+ */
+export async function findPersonByNameAndDomain(
+  fullName: string,
+  domain: string
+): Promise<{
+  id: string;
+  person_key: string;
+  phone: string | null;
+  full_name: string;
+} | null> {
+  const normalizedName = normalizeNameForComparison(fullName);
+  if (!normalizedName) return null;
+
+  const { data, error } = await supabase
+    .from("people")
+    .select("id, person_key, phone, full_name")
+    .eq("normalized_company_domain", domain)
+    .limit(100);
+
+  if (error) throw error;
+  if (!data) return null;
+
+  // Find match by normalized name
+  for (const person of data) {
+    if (normalizeNameForComparison(person.full_name) === normalizedName) {
+      return {
+        id: person.id,
+        person_key: person.person_key,
+        phone: person.phone,
+        full_name: person.full_name,
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * Update person with enriched data, only filling in missing fields.
  * Returns list of fields that were updated.
  */

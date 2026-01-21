@@ -382,3 +382,14 @@ export function classifyPersonRole(
   // Default to contact_person if no match
   return "contact_person";
 }
+
+/**
+ * Validates that a name has at least 2 words (first + last name).
+ * Single-word names like "Wiggen" are not valid identifiable names.
+ */
+export function isValidPersonName(name?: string | null): boolean {
+  if (!name) return false;
+  const trimmed = name.trim();
+  const words = trimmed.split(/\s+/).filter((w) => w.length > 0);
+  return words.length >= 2;
+}

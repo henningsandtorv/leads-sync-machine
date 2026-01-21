@@ -23,6 +23,7 @@ import {
   normalizeDomainHost,
   canonicalizeLinkedInUrl,
   extractFinnIdFromUrl,
+  isValidPersonName,
 } from "../lib/normalize";
 import { buildPersonKey } from "../lib/keys";
 
@@ -98,7 +99,12 @@ async function handleClayEnrichment(
     if (payload.decision_makers.length > 0) {
       const newPeople: PersonRecord[] = [];
 
-      for (const dm of payload.decision_makers) {
+      // Filter out invalid names (single-word names are not valid)
+      const validDecisionMakers = payload.decision_makers.filter((dm) =>
+        isValidPersonName(dm.full_name)
+      );
+
+      for (const dm of validDecisionMakers) {
         // Check if this person already exists
         const existing = await findExistingPerson({
           linkedin_url: dm.linkedin_url,
@@ -145,6 +151,7 @@ async function handleClayEnrichment(
             linkedin_url: dm.linkedin_url,
             email: dm.email,
             phone: dm.phone,
+            company_domain: company.clean_domain,
             company_key: company.company_key,
             company_name: company.name,
             full_name: dm.full_name,

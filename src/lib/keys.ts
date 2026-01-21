@@ -49,30 +49,36 @@ export function buildPersonKey(params: {
   linkedin_url?: string | null;
   email?: string | null;
   phone?: string | null;
+  company_domain?: string | null;
   company_key?: string | null;
   full_name?: string | null;
-  company_name?: string | null; // Add company_name for name-based keys
+  company_name?: string | null;
 }) {
-  // Prefer unique identifiers (no prefixes)
+  // Priority 1: LinkedIn URL (unique identifier)
   const linkedin = canonicalizeLinkedInUrl(params.linkedin_url);
-  if (linkedin) return linkedin; // Just the URL, no prefix
+  if (linkedin) return linkedin;
 
+  // Priority 2: Email (unique identifier)
   const email = normalizeEmail(params.email);
-  if (email) return email; // Just the email, no prefix
+  if (email) return email;
 
+  // Priority 3: Phone (unique identifier)
   const phone = normalizePhone(params.phone);
-  if (phone) return phone; // Just the phone, no prefix
+  if (phone) return phone;
 
-  // Fallback: use company_name + person_name format
-  // Format: "{normalized_company_name}_{normalized_person_name}"
+  // Fallback: use domain or company_name + person_name
   const personName = normalizeNameForKey(params.full_name);
   if (personName) {
-    // Use company_name if provided, otherwise fall back to company_key
-    // If company_key is a domain, we need to get the company name from somewhere
-    // For now, use company_name if available, otherwise use company_key as-is
+    // Priority 4: Domain + name (preferred - domain is stable)
+    const domain = normalizeDomainHost(params.company_domain);
+    if (domain && domain !== "finn.no") {
+      return `${domain}_${personName}`;
+    }
+
+    // Priority 5: Company name + person name (last resort)
     const companyName = params.company_name
       ? normalizeNameForKey(params.company_name)
-      : params.company_key; // company_key is already normalized (domain or slug)
+      : params.company_key;
 
     if (companyName) {
       return `${companyName}_${personName}`;

@@ -8,6 +8,8 @@ import {
   normalizeDate,
   classifyPersonRole,
   normalizeCompanyNameForMatching,
+  isValidPersonName,
+  normalizeNameForComparison,
 } from "../lib/normalize";
 import { buildCompanyKey, buildPersonKey } from "../lib/keys";
 import {
@@ -18,6 +20,7 @@ import {
   upsertCompanyPeople,
   getDecisionMakersByCompanyId,
   getJobPostWithDecisionMakers,
+  findPersonByNameAndDomain,
   CompanyRecord,
   PersonRecord,
   JobPostRecord,
@@ -142,20 +145,56 @@ export async function handleApifyJob(
   const jobResult = await upsertJobPostSmart(job);
   const jobPostId = jobResult.id;
 
-  const people: PersonRecord[] = payload.contactPersons.map((p) => {
+  // Filter out invalid names (single-word names like "Wiggen" are not valid)
+  const validContactPersons = payload.contactPersons.filter((p) =>
+    isValidPersonName(p.name)
+  );
+
+  // Process people: check for existing by name+domain first, then create new records
+  const personIdByKey = new Map<string, string>();
+  const personIdByNameDomain = new Map<string, string>();
+  const pendingNameDomainByPersonKey = new Map<string, string>();
+  const peopleToUpsert: PersonRecord[] = [];
+  const normalizedCompanyName = normalizeCompanyNameForMatching(payload.company);
+  const normalizedCompanyDomain = normalizeDomainHost(companyDomain);
+
+  const buildNameDomainKey = (name?: string | null) => {
+    const normalizedName = normalizeNameForComparison(name);
+    if (!normalizedName || !normalizedCompanyDomain) return null;
+    return `${normalizedName}|${normalizedCompanyDomain}`;
+  };
+
+  for (const p of validContactPersons) {
+    // Check if person already exists by name + domain (prevents duplicates)
+    if (companyDomain) {
+      const existing = await findPersonByNameAndDomain(p.name, companyDomain);
+      if (existing) {
+        // Use existing person - they already exist in DB
+        personIdByKey.set(existing.person_key, existing.id);
+        const nameDomainKey = buildNameDomainKey(p.name);
+        if (nameDomainKey) {
+          personIdByNameDomain.set(nameDomainKey, existing.id);
+        }
+        continue;
+      }
+    }
+
+    // Build new person record
     const personKey = buildPersonKey({
       linkedin_url: p.linkedin,
       email: p.email,
       phone: p.phoneNumber,
-      company_key: actualCompanyKey, // Use actual company key (may be from existing record)
-      company_name: payload.company, // Pass company name for name-based keys
+      company_domain: companyDomain,
+      company_key: actualCompanyKey,
+      company_name: payload.company,
       full_name: p.name,
     });
+    const nameDomainKey = buildNameDomainKey(p.name);
+    if (nameDomainKey) {
+      pendingNameDomainByPersonKey.set(personKey, nameDomainKey);
+    }
 
-    // Normalize company name for people record (same function used for companies.clean_name)
-    const normalizedCompanyName = normalizeCompanyNameForMatching(payload.company);
-
-    return {
+    peopleToUpsert.push({
       person_key: personKey,
       full_name: p.name,
       title: p.role ?? null,
@@ -166,27 +205,54 @@ export async function handleApifyJob(
         normalized_company_name: normalizedCompanyName,
       }),
       ...(companyDomain && { normalized_company_domain: companyDomain }),
-    };
-  });
+    });
+  }
 
-  // Upsert people and get their IDs
-  const peopleResult = await upsertPeople(people);
-  const personIdMap = new Map<string, string>();
-  for (const person of peopleResult.records) {
-    if (person.person_key && person.id) {
-      personIdMap.set(person.person_key, person.id);
+  let peopleResult = {
+    inserted: 0,
+    updated: 0,
+    records: [] as (PersonRecord & { id: string })[],
+  };
+
+  // Upsert new people and add their IDs to the map
+  if (peopleToUpsert.length > 0) {
+    peopleResult = await upsertPeople(peopleToUpsert);
+    for (const person of peopleResult.records) {
+      if (person.person_key && person.id) {
+        personIdByKey.set(person.person_key, person.id);
+        const nameDomainKey = pendingNameDomainByPersonKey.get(
+          person.person_key
+        );
+        if (nameDomainKey) {
+          personIdByNameDomain.set(nameDomainKey, person.id);
+        }
+      }
     }
   }
 
   // Build link records with UUIDs, using role classification based on title
-  const jobPersonLinks = people
-    .map((p, index) => {
-      const personId = personIdMap.get(p.person_key);
+  const jobPersonLinks = validContactPersons
+    .map((p) => {
+      // Find person ID by name+domain or exact person_key
+      const nameDomainKey = buildNameDomainKey(p.name);
+      let personId = nameDomainKey
+        ? personIdByNameDomain.get(nameDomainKey)
+        : undefined;
+      if (!personId) {
+        const expectedKey = buildPersonKey({
+          linkedin_url: p.linkedin,
+          email: p.email,
+          phone: p.phoneNumber,
+          company_domain: companyDomain,
+          company_key: actualCompanyKey,
+          company_name: payload.company,
+          full_name: p.name,
+        });
+        personId = personIdByKey.get(expectedKey);
+      }
       if (!personId) return null;
 
-      // Get the original person data to access their role/title
-      const originalPerson = payload.contactPersons[index];
-      const classifiedRole = classifyPersonRole(originalPerson?.role);
+      const classifiedRole = classifyPersonRole(p.role);
 
       return {
         job_post_id: jobPostId,
@@ -196,14 +262,28 @@ export async function handleApifyJob(
     })
     .filter((link): link is NonNullable<typeof link> => link !== null);
 
-  const companyPersonLinks = people
-    .map((p, index) => {
-      const personId = personIdMap.get(p.person_key);
+  const companyPersonLinks = validContactPersons
+    .map((p) => {
+      // Find person ID by name+domain or exact person_key
+      const nameDomainKey = buildNameDomainKey(p.name);
+      let personId = nameDomainKey
+        ? personIdByNameDomain.get(nameDomainKey)
+        : undefined;
+      if (!personId) {
+        const expectedKey = buildPersonKey({
+          linkedin_url: p.linkedin,
+          email: p.email,
+          phone: p.phoneNumber,
+          company_domain: companyDomain,
+          company_key: actualCompanyKey,
+          company_name: payload.company,
+          full_name: p.name,
+        });
+        personId = personIdByKey.get(expectedKey);
+      }
       if (!personId) return null;
 
-      // Get the original person data to access their role/title
-      const originalPerson = payload.contactPersons[index];
-      const classifiedRole = classifyPersonRole(originalPerson?.role);
+      const classifiedRole = classifyPersonRole(p.role);
 
       return {
         company_id: companyId,
@@ -242,7 +322,11 @@ export async function handleApifyJob(
       inserted: jobResult.isNew ? 1 : 0,
       updated: jobResult.isNew ? 0 : 1,
     },
-    people: peopleResult,
+    people: {
+      inserted: peopleResult.inserted,
+      updated: 0,
+      existing_matched: validContactPersons.length - peopleToUpsert.length,
+    },
     job_post_people: await upsertJobPostPeople(allJobPersonLinks),
     company_people: await upsertCompanyPeople(companyPersonLinks),
     decision_makers_linked: decisionMakerLinks.length,
